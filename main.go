@@ -5,15 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/barasher/go-exiftool"
+	"github.com/golang-module/carbon/v2"
 	"github.com/jessevdk/go-flags"
-	"github.com/jinzhu/now"
 	"github.com/k0kubun/go-ansi"
+	"github.com/olekukonko/tablewriter"
 	"github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
 )
@@ -25,8 +25,9 @@ type Option struct {
 }
 
 type Photo struct {
-	Name     string
-	Metadata exiftool.FileMetadata
+	Name      string
+	Metadata  exiftool.FileMetadata
+	CreatedAt time.Time
 }
 
 func main() {
@@ -54,15 +55,36 @@ func runMain() error {
 		}
 		paths = append(paths, files...)
 	}
+	dirFiles, err := walkDir(opt.Dir)
+	if err != nil {
+		return err
+	}
+	paths = append(paths, dirFiles...)
 
 	photos, err := touch(ctx, paths, opt.Timestamp, opt.Dryrun)
 	if err != nil {
 		return err
 	}
 
+	var data [][]string
 	for _, photo := range photos {
-		fmt.Println("done", photo)
+		data = append(data, []string{photo.Name, photo.CreatedAt.Format("2006/01/02 15:04:05")})
 	}
+
+	table := tablewriter.NewWriter(os.Stdout)
+	// table.SetHeader([]string{"Filename", "CreatedAt"})
+	table.SetAutoWrapText(false)
+	table.SetAutoFormatHeaders(true)
+	table.SetHeaderAlignment(tablewriter.ALIGN_LEFT)
+	table.SetAlignment(tablewriter.ALIGN_LEFT)
+	table.SetCenterSeparator("")
+	table.SetColumnSeparator("")
+	table.SetRowSeparator("")
+	table.SetHeaderLine(false)
+	table.SetTablePadding("\t")
+	table.SetNoWhiteSpace(true)
+	table.AppendBulk(data) // Add Bulk Data
+	table.Render()
 
 	return nil
 }
@@ -131,7 +153,7 @@ func touch(ctx context.Context, files []string, datetime string, dryrun bool) ([
 
 	var photos []Photo
 	for photo := range ch {
-		bar.Add(1)
+		_ = bar.Add(1)
 		photos = append(photos, photo)
 	}
 
@@ -140,16 +162,16 @@ func touch(ctx context.Context, files []string, datetime string, dryrun bool) ([
 }
 
 func modify(file, datetime string, dryrun bool) (Photo, error) {
-	location, err := time.LoadLocation("Asia/Tokyo")
-	if err != nil {
-		return Photo{}, err
-	}
-	tc := &now.Config{
-		WeekStartDay: time.Monday,
-		TimeLocation: location,
-		TimeFormats:  []string{"2006-01-02 15:04:05", "2006-01-02"},
-	}
-	ts := tc.MustParse(datetime)
+	// location, err := time.LoadLocation("Asia/Tokyo")
+	// if err != nil {
+	// 	return Photo{}, err
+	// }
+	// tc := &now.Config{
+	// 	WeekStartDay: time.Monday,
+	// 	TimeLocation: location,
+	// 	TimeFormats:  []string{"2006-01-02 15:04:05", "2006-01-02"},
+	// }
+	ts := carbon.Parse(datetime)
 
 	et, err := exiftool.NewExiftool()
 	if err != nil {
@@ -187,15 +209,13 @@ func modify(file, datetime string, dryrun bool) (Photo, error) {
 		// originals[0].SetString(thing, tm.AddDate(years, months, days).Format(layout))
 		originals[0].SetString(thing, ts.Format(layout))
 	}
-	if dryrun {
-		log.Printf("[DEBUG] DRY-RUN: Set %s (%s)", file, ts.Format("2006/01/02"))
-	} else {
-		log.Printf("[DEBUG] Set %s (%s)", file, ts.Format("2006/01/02"))
+	if !dryrun {
 		et.WriteMetadata(originals)
 	}
 
 	return Photo{
-		Name:     file,
-		Metadata: originals[0],
+		Name:      file,
+		Metadata:  originals[0],
+		CreatedAt: ts.StdTime(),
 	}, nil
 }
